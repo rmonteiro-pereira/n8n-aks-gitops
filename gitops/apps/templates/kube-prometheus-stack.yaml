@@ -70,6 +70,11 @@ spec:
             existingSecret: grafana-admin
             userKey: admin-user
             passwordKey: admin-password
+          # The volume is ReadWriteOnce. A rolling update starts the new pod
+          # before stopping the old one; on another node the disk cannot
+          # attach twice and the rollout hangs on a Multi-Attach error.
+          deploymentStrategy:
+            type: Recreate
           persistence:
             enabled: true
             storageClassName: zrs-ssd

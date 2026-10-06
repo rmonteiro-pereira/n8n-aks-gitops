@@ -10,8 +10,9 @@ spec:
   # Recreate, not RollingUpdate: a rolling update runs the old and the new
   # main side by side, and two mains without multi-main mode both fire every
   # schedule trigger. A few seconds of editor downtime is the cheaper side of
-  # that trade; production webhooks are served by the webhook processors and
-  # keep answering throughout.
+  # that trade; production webhooks and forms are served by the webhook
+  # processors and keep answering throughout. MCP Server Triggers do not:
+  # they are routed to this pod (see httproute.yaml).
   strategy:
     type: Recreate
   selector:

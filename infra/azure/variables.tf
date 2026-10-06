@@ -65,7 +65,8 @@ variable "apiserver_subnet_cidr" {
   description = <<-EOT
     Delegated subnet the control plane is projected into (API Server VNet
     Integration). Minimum /28. Its CIDR is what the NetworkPolicy of the
-    database namespace allows as egress -- see docs/architecture.md.
+    database namespace allows as egress -- see the comment in
+    gitops/n8n/templates/networkpolicy.yaml.
   EOT
   type        = string
   default     = "10.42.4.0/28"

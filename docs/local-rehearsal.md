@@ -43,7 +43,8 @@ a public DNS name. On a throwaway branch, replace them with local stand-ins:
 Add `gitops/apps/env/local.yaml` with `repoURL` pointing at wherever the
 branch is served from (a `git daemon` on the host works), empty
 `azure.backup.destinationPath` (disables backups), `azure.apiServerCidr` set
-to the node address, `monitoring.enabled: false`, and under `n8n.values`
+to the node address as a /32 CIDR (for example `192.168.1.10/32`),
+`monitoring.enabled: false`, and under `n8n.values`
 single-node sizes (`postgres.instances: 1`) and
 `networkPolicy.apiServer.ports: [6443]`.
 

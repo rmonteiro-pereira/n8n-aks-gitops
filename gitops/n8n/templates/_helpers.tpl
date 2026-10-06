@@ -132,6 +132,13 @@ n8n opens on localhost and authenticates with a shared token.
 */}}
 {{- define "n8n.runnerContainer" -}}
 - name: runners
+  # A native sidecar (an init container that keeps running). The kubelet
+  # stops it only AFTER the n8n container has exited. As an ordinary
+  # container it would get SIGTERM at the same moment as the worker and exit
+  # within a minute, while the worker keeps draining for
+  # worker.gracefulShutdownSeconds -- failing the Code node of every
+  # execution still in flight, on every scale-in and rollout.
+  restartPolicy: Always
   image: {{ .Values.taskRunners.image.repository }}:{{ .Values.taskRunners.image.tag | default .Values.image.tag }}
   imagePullPolicy: {{ .Values.image.pullPolicy }}
   env:

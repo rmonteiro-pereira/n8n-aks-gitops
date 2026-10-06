@@ -52,6 +52,22 @@ resource "azurerm_role_assignment" "cluster_public_ips" {
   principal_type       = "ServicePrincipal"
 }
 
+# A role assignment that exists is not yet a role assignment that is
+# honoured: Azure RBAC takes a minute or two to propagate. AKS checks the
+# identity's permissions on the subnets and the outbound IP while it creates
+# the cluster, and `depends_on` alone only orders the API calls. If a create
+# does fail on authorization anyway, the cluster may exist in Azure in a
+# Failed state without being in state -- delete it (`az aks delete`) before
+# applying again.
+resource "time_sleep" "cluster_roles" {
+  create_duration = "120s"
+
+  depends_on = [
+    azurerm_role_assignment.cluster_subnets,
+    azurerm_role_assignment.cluster_public_ips,
+  ]
+}
+
 resource "azurerm_kubernetes_cluster" "main" {
   name                = "aks-${local.suffix}"
   resource_group_name = azurerm_resource_group.main.name
@@ -178,11 +194,9 @@ resource "azurerm_kubernetes_cluster" "main" {
     ]
   }
 
-  # The roles must exist before the control plane tries to use them.
-  depends_on = [
-    azurerm_role_assignment.cluster_subnets,
-    azurerm_role_assignment.cluster_public_ips,
-  ]
+  # The roles must exist, and have propagated, before the control plane
+  # tries to use them.
+  depends_on = [time_sleep.cluster_roles]
 }
 
 resource "azurerm_role_assignment" "registry_pull" {

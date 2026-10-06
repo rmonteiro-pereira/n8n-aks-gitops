@@ -29,6 +29,48 @@ configs:
       end
       return hs
 
+    # The built-in Gateway health check reports Degraded while a listener's
+    # certificate Secret does not exist yet. On a first install that is the
+    # normal state for as long as DNS and the ACME challenge take -- and a
+    # Degraded resource FAILS the sync wave, where a Progressing one just
+    # makes it wait. Degraded is kept for a Gateway the controller rejected.
+    resource.customizations.health.gateway.networking.k8s.io_Gateway: |
+      hs = {}
+      hs.status = "Progressing"
+      hs.message = "Waiting for the Gateway to be programmed"
+      if obj.status == nil or obj.status.conditions == nil then
+        return hs
+      end
+      local programmed = false
+      for _, c in ipairs(obj.status.conditions) do
+        if c.type == "Accepted" and c.status == "False" then
+          hs.status = "Degraded"
+          hs.message = c.message
+          return hs
+        end
+        if c.type == "Programmed" and c.status == "True" then
+          programmed = true
+        end
+      end
+      if not programmed then
+        return hs
+      end
+      if obj.status.listeners ~= nil then
+        for _, l in ipairs(obj.status.listeners) do
+          if l.conditions ~= nil then
+            for _, c in ipairs(l.conditions) do
+              if (c.type == "Programmed" or c.type == "ResolvedRefs") and c.status == "False" then
+                hs.message = "Listener " .. l.name .. ": " .. (c.message or c.reason or "not ready")
+                return hs
+              end
+            end
+          end
+        end
+      end
+      hs.status = "Healthy"
+      hs.message = "Gateway is programmed"
+      return hs
+
 controller:
   resources:
     requests:

@@ -90,10 +90,20 @@ resource "azurerm_public_ip" "egress" {
 resource "azurerm_dns_a_record" "n8n" {
   count = var.dns_zone == null ? 0 : 1
 
-  name                = trimsuffix(var.n8n_hostname, ".${var.dns_zone.name}")
+  # "@" is the zone apex. Anything that is neither the zone itself nor a name
+  # under it would be created as <hostname>.<zone> -- a record nobody asked
+  # for, in a plan that looks fine.
+  name                = lower(var.n8n_hostname) == lower(var.dns_zone.name) ? "@" : trimsuffix(lower(var.n8n_hostname), ".${lower(var.dns_zone.name)}")
   zone_name           = var.dns_zone.name
   resource_group_name = var.dns_zone.resource_group_name
   ttl                 = 300
   records             = [azurerm_public_ip.ingress.ip_address]
   tags                = var.tags
+
+  lifecycle {
+    precondition {
+      condition     = lower(var.n8n_hostname) == lower(var.dns_zone.name) || endswith(lower(var.n8n_hostname), ".${lower(var.dns_zone.name)}")
+      error_message = "n8n_hostname must be dns_zone.name or a name under it."
+    }
+  }
 }

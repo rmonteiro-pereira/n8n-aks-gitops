@@ -62,7 +62,7 @@ flowchart TB
     git[("This git repository")]
 
     user -->|HTTPS| pipin --> gw
-    gw -->|/webhook| webhook
+    gw -->|webhooks and forms| webhook
     gw -->|everything else| main
     main --> valkey
     webhook --> valkey
@@ -116,8 +116,10 @@ sequenceDiagram
 The **main** process is the only one that is not horizontally scaled: it serves
 the editor and fires schedule and polling triggers, and running two of them
 needs n8n's multi-main mode, an Enterprise feature. While it restarts, the
-editor is unavailable for a few seconds; production webhooks keep being
-accepted and executed, because they never touch it.
+editor is unavailable for a few seconds; production webhooks and forms keep
+being accepted and executed, because they never touch it. The one exception is
+the MCP Server Trigger: its streaming connection must always reach the same
+process, so `/mcp` is routed to the main pod and shares its availability.
 
 ## How it gets deployed
 
@@ -298,7 +300,8 @@ infra/
   bootstrap/        Stack 2 - ArgoCD, the AppProject and the root Application
 gitops/
   apps/             App-of-apps: one ArgoCD Application per component
-    env/prod.yaml   Generated from the Azure outputs; the only per-environment file
+    env/prod.yaml             Generated from the Azure outputs
+    env/prod.overrides.yaml   Hand-written settings for the environment
   platform-config/  StorageClass, ClusterSecretStore, ClusterIssuers, Gateway
   n8n/              The n8n chart: workloads, Postgres, Valkey, policies, alerts
 scripts/            create-tfstate, seed-secrets, render-env-values
@@ -354,8 +357,11 @@ kubectl -n argocd get applications -w
 When every Application is `Synced` and `Healthy`, open `https://<your-host>`
 and create the owner account. The certificate is from Let's Encrypt
 **staging** at this point (browsers will warn): once it has been issued, set
-`acme.issuer: letsencrypt-prod` in `gitops/apps/env/prod.yaml`, commit, and the
-real certificate replaces it.
+`acme.issuer: letsencrypt-prod` in `gitops/apps/env/prod.overrides.yaml`,
+commit, and the real certificate replaces it.
+
+The sync waits at the configuration wave until that first certificate exists,
+so n8n itself does not appear until DNS resolves to the ingress IP.
 
 Day-2 procedures — upgrades, scaling, secret rotation, restore, alert routing —
 are in [docs/operations.md](docs/operations.md).
@@ -380,6 +386,9 @@ in comments next to the code it applies to.
 | Secrets seeded by script, not by OpenTofu | Anything written through a resource is stored in state. |
 | Federated credential on the ServiceAccount named after the database cluster | That is the account the backup actually runs under. Federating a hand-made "backup" account yields a cluster that tries to archive and fails authentication forever. |
 | Code nodes run in a sidecar task runner | User code executes outside the process that holds the encryption key and the database connection. |
+| The task runner is a native sidecar | As an ordinary container it is stopped at the same moment as the worker and exits within a minute, while the worker drains for up to five; in-flight Code nodes would fail on every scale-in. |
+| Root Application retries without limit, and a Gateway waiting for its certificate is `Progressing`, not `Degraded` | The first certificate depends on DNS. A failed sync wave is not retried once the budget is spent, and the later waves — n8n included — would never be created. |
+| Generated and hand-written environment values are separate files | Re-running the generator would otherwise silently revert the certificate issuer and drop restore settings. |
 
 ## Known limits
 
@@ -404,7 +413,7 @@ in comments next to the code it applies to.
 | Both OpenTofu stacks | `tofu validate` (azurerm 4.x, helm 3.x, kubernetes 3.x) |
 | All charts | `helm lint`, rendered and validated against Kubernetes and CRD schemas |
 | The n8n chart, running | Deployed on a local k3s cluster under `restricted` Pod Security and default-deny: a webhook call routed to the webhook processor, queued, executed by a worker through the task-runner sidecar and answered; 60 queued jobs scaled the workers from 1 to 3 through KEDA |
-| The GitOps tree, running | ArgoCD bootstrapped on k3s the same way the bootstrap stack does it; all seven Applications reached `Synced` / `Healthy` in wave order, and n8n was served over HTTPS through Envoy Gateway with the declared timeouts present in Envoy's route table |
+| The GitOps tree, running | ArgoCD bootstrapped on k3s the same way the bootstrap stack does it, with monitoring disabled; the seven Applications that exist in that configuration (root plus six children — kube-prometheus-stack is not rendered) reached `Synced` / `Healthy` in wave order, and n8n was served over HTTPS through Envoy Gateway with the declared timeouts present in Envoy's route table |
 
 Not exercised, because it needs a real Azure subscription: `tofu apply`, Key
 Vault through workload identity, the Azure load balancer and public IP

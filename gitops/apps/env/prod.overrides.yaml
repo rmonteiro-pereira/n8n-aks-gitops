@@ -1,0 +1,13 @@
+# Hand-written settings for this environment, merged over prod.yaml.
+#
+# prod.yaml is generated and is overwritten every time
+# scripts/render-env-values.sh runs. Everything a person decides goes HERE:
+# the certificate issuer, sizing, restore settings.
+
+acme:
+  # Switch to letsencrypt-prod once the staging certificate has been issued.
+  issuer: letsencrypt-staging
+
+# Overrides for the n8n chart (gitops/n8n/values.yaml).
+n8n:
+  values: {}

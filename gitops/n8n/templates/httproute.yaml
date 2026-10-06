@@ -1,13 +1,21 @@
 {{- if .Values.gateway.enabled }}
 # Routing by path, most specific first:
 #
-#   /webhook/...        -> webhook processors  (production webhook calls)
-#   /rest/push          -> main, no timeout    (the editor's live channel)
-#   everything else     -> main                (editor, REST API, forms,
-#                                               /webhook-test/, /webhook-waiting/)
+#   /webhook, /webhook-waiting,      -> webhook processors
+#   /form, /form-waiting                (everything a third party or an end
+#                                        user calls on an ACTIVE workflow)
+#   /mcp                             -> main, no timeout
+#   /rest/push                       -> main, no timeout (editor live channel)
+#   everything else                  -> main (editor, REST API, and the
+#                                        -test endpoints of the editor)
 #
 # PathPrefix matches whole path elements, so `/webhook` does not swallow
-# `/webhook-test` or `/webhook-waiting`.
+# `/webhook-test`, and `/form` does not swallow `/form-test`.
+#
+# /mcp (MCP Server Trigger) is a long-lived streaming connection that must
+# always reach the SAME process. n8n requires a single replica for it when
+# webhook processors are scaled out; the single main pod is that replica
+# here, so MCP triggers share main's availability.
 #
 # Defaults the Gateway API would fill in (group, kind, weight, match type)
 # are written out so the live object equals the manifest -- see the note in
@@ -32,6 +40,15 @@ spec:
         - path:
             type: PathPrefix
             value: /webhook
+        - path:
+            type: PathPrefix
+            value: /webhook-waiting
+        - path:
+            type: PathPrefix
+            value: /form
+        - path:
+            type: PathPrefix
+            value: /form-waiting
       timeouts:
         request: {{ .Values.gateway.timeouts.webhook }}
       backendRefs:
@@ -44,6 +61,9 @@ spec:
         - path:
             type: PathPrefix
             value: /rest/push
+        - path:
+            type: PathPrefix
+            value: /mcp
       # 0s disables the request timeout: this is a long-lived WebSocket (or
       # server-sent events) connection, kept open for as long as the editor
       # tab is.

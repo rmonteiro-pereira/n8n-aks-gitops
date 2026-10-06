@@ -1,5 +1,5 @@
 # Overrides for a single-node local cluster (k3s, kind): no Azure, no Gateway,
-# no Prometheus. Used by the smoke test described in docs/local-smoke-test.md.
+# no Prometheus. Used by the smoke test described in docs/local-rehearsal.md.
 host: n8n.localtest.me
 
 secrets:

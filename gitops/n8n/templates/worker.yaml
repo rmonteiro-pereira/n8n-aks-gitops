@@ -33,6 +33,8 @@ spec:
       # worker that is still inside its own drain window.
       terminationGracePeriodSeconds: {{ add .Values.worker.gracefulShutdownSeconds 30 }}
       {{- include "n8n.spread" "worker" | nindent 6 }}
+      initContainers:
+        {{- include "n8n.runnerContainer" . | nindent 8 }}
       containers:
         - name: n8n
           image: {{ include "n8n.image" . }}
@@ -67,7 +69,6 @@ spec:
             {{- toYaml .Values.worker.resources | nindent 12 }}
           {{- include "n8n.containerSecurity" . | nindent 10 }}
           {{- include "n8n.volumeMounts" . | nindent 10 }}
-        {{- include "n8n.runnerContainer" . | nindent 8 }}
       {{- include "n8n.volumes" . | nindent 6 }}
         - name: runner-tmp
           emptyDir: {}

@@ -47,6 +47,11 @@ kubectl -n argocd get application <app> \
   -o jsonpath='{.status.operationState.phase} {.status.operationState.message}{"\n"}'
 ```
 
+On a first install the root Application stays `Progressing` at
+`platform-config` until the certificate is issued — that is the wave waiting,
+not a fault. If an operation does end up `Failed`, start a new one with
+`argocd app sync <app>` or by pushing any commit.
+
 ## Upgrading n8n
 
 1. Read the n8n release notes for breaking changes between the two versions.
@@ -69,7 +74,7 @@ kubectl cnpg backup n8n-db -n n8n        # needs the cnpg kubectl plugin
 ## Scaling
 
 All in `gitops/n8n/values.yaml`, or per environment under `n8n.values` in
-`gitops/apps/env/<env>.yaml`.
+`gitops/apps/env/<env>.overrides.yaml`.
 
 | Symptom | Change |
 |---|---|
@@ -92,13 +97,19 @@ every hour.
 | `n8n-encryption-key` | **Never.** Changing it makes every stored credential unreadable. |
 | `n8n-redis-password` | Set a new version in the vault, wait for (or force) the refresh, then restart Valkey and the n8n workloads together. Queued jobs survive; there is a short interruption. |
 | `n8n-runners-auth-token` | New version in the vault, refresh, restart the workers. |
-| `grafana-admin-password` | New version in the vault, refresh, restart Grafana. |
+| `grafana-admin-password` | The vault value only seeds the admin user the first time Grafana starts on an empty volume; a restart does not apply a new one. Change it inside Grafana (below), then store the same value as a new version in the vault. |
 | Database password | Owned by CloudNativePG (`n8n-db-app`). |
 
 ```bash
 openssl rand -hex 24 | tr -d '\n' | az keyvault secret set --vault-name <vault> --name n8n-redis-password --file /dev/stdin -o none
 kubectl -n n8n annotate externalsecret n8n-secrets force-sync="$(date +%s)" --overwrite
 kubectl -n n8n rollout restart statefulset/n8n-valkey deployment/n8n-main deployment/n8n-webhook deployment/n8n-worker
+```
+
+```bash
+# Grafana: reset in place, then record it
+kubectl -n monitoring exec deploy/kube-prometheus-stack-grafana -c grafana -- grafana cli admin reset-admin-password "$NEW"
+printf %s "$NEW" | az keyvault secret set --vault-name <vault> --name grafana-admin-password --file /dev/stdin -o none
 ```
 
 A rollout restart is a live change ArgoCD does not revert: it only touches a
@@ -108,7 +119,7 @@ pod-template annotation the manifests do not declare.
 
 The Gateway starts on `letsencrypt-staging`. When
 `kubectl -n envoy-gateway-system get certificate n8n-tls` shows `READY True`,
-set in `gitops/apps/env/prod.yaml`:
+set in `gitops/apps/env/prod.overrides.yaml`:
 
 ```yaml
 acme:
@@ -157,15 +168,18 @@ is created, so this is delete-and-recreate, driven from git:
    to `gitops/apps/templates/n8n.yaml`: remove the `automated` block from the
    `syncPolicy` of the n8n Application (the helper is shared — override it for
    this Application only). Merge and let the root sync.
-2. Delete the database:
+2. Stop n8n and delete the database. The ScaledObject goes first: while it
+   exists, KEDA puts the workers back within seconds.
    ```bash
+   kubectl -n n8n delete scaledobject n8n-worker      # ArgoCD recreates it in step 4
    kubectl -n n8n scale deploy n8n-main n8n-webhook n8n-worker --replicas=0
+   kubectl -n n8n rollout status deploy/n8n-worker
    kubectl -n n8n delete cluster n8n-db
    ```
    The disks are kept (`reclaimPolicy: Retain`) — they are your fallback until
    the restore is confirmed. Delete the released PersistentVolumes and their
    Azure disks afterwards.
-3. In `gitops/apps/env/prod.yaml`:
+3. In `gitops/apps/env/prod.overrides.yaml`:
    ```yaml
    n8n:
      values:
@@ -177,8 +191,12 @@ is created, so this is delete-and-recreate, driven from git:
          backup:
            serverName: n8n-db-r1              # the restored cluster writes somewhere NEW
    ```
-4. Restore the `automated` sync policy, merge. ArgoCD recreates the Cluster,
-   which replays the backup, then starts n8n.
+4. Restore the `automated` sync policy, merge. ArgoCD recreates the Cluster
+   and, in the same sync, brings the n8n workloads back; they fail their
+   probes and restart until the recovered primary accepts connections, then
+   come up on their own. To inspect the data before n8n touches it, keep
+   automation off and sync only the Cluster first
+   (`argocd app sync n8n --resource postgresql.cnpg.io:Cluster:n8n-db`).
 5. Leave `recovery.enabled` and the new `serverName` in place: they describe
    how this Cluster was born and where it archives. For the next restore,
    `sourceServerName` becomes `n8n-db-r1` and `serverName` `n8n-db-r2`.
@@ -213,12 +231,25 @@ applied from there; ArgoCD does not manage its own installation.
 ## Tearing it down
 
 ```bash
+# The root Application goes first, or its selfHeal re-adds what the next line removes.
+tofu -chdir=infra/bootstrap destroy -target=helm_release.root
+# The child Applications carry a finalizer only ArgoCD can clear. Drop it, or
+# the argocd namespace never finishes terminating once ArgoCD is gone.
+kubectl -n argocd get applications -o name |
+  xargs -r -n1 kubectl -n argocd patch --type=merge -p '{"metadata":{"finalizers":null}}'
 tofu -chdir=infra/bootstrap destroy
 # remove the prevent_destroy blocks from infra/azure/network.tf, then:
 tofu -chdir=infra/azure destroy
 ```
 
+That is the full teardown, where the cluster is destroyed next. To keep the
+cluster and remove only the workloads, delete the Applications while ArgoCD
+is still running, in reverse wave order and waiting for each: n8n,
+kube-prometheus-stack, platform-config, then the operators.
+
 The Key Vault is soft-deleted and stays recoverable for 90 days (purge
-protection cannot be turned off); its name is unavailable until then. Disks
-created with the `Retain` storage class outlive the cluster in the node
-resource group's lifetime — check for orphaned disks.
+protection cannot be turned off); its name is unavailable until then. `Retain` protects a
+disk from PVC or namespace deletion only while the cluster exists: the disks
+live in the node resource group, which AKS deletes together with the cluster.
+After the last command the Blob Storage backups are the only copy of the
+database, so confirm a recent backup before destroying.

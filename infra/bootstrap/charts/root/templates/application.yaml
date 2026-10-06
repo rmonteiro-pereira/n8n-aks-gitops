@@ -13,6 +13,8 @@ spec:
       valueFiles:
         - values.yaml
         - env/{{ .Values.environment }}.yaml
+        - env/{{ .Values.environment }}.overrides.yaml
+      ignoreMissingValueFiles: true
       parameters:
         - name: targetRevision
           value: {{ .Values.targetRevision | quote }}
@@ -23,8 +25,12 @@ spec:
     automated:
       prune: true
       selfHeal: true
+    # Unlimited. A wave that waits on something outside the cluster (DNS,
+    # a certificate) must not exhaust a retry budget: once the root's sync
+    # operation has failed for good, nothing starts another one until the
+    # next commit, and the later waves are never created.
     retry:
-      limit: 5
+      limit: -1
       backoff:
         duration: 30s
         factor: 2

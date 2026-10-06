@@ -44,7 +44,8 @@ main:
     limits:
       memory: 1536Mi
 
-# Webhook processors: receive production webhook calls and enqueue them.
+# Webhook processors: receive production webhook, form and wait-resume calls
+# and enqueue them.
 # Stateless, so they scale horizontally and survive node drains.
 webhook:
   replicas: 2
@@ -129,7 +130,9 @@ postgres:
   # the subject of the backup identity in infra/azure. Renaming it here
   # without renaming it there breaks backups.
   clusterName: n8n-db
-  imageName: ghcr.io/cloudnative-pg/postgresql:17.9
+  # The `system` flavour ships barman-cloud inside the image, which the
+  # in-tree backup below needs. `standard` and `minimal` do not.
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.11-system-trixie
   instances: 2
   storage:
     size: 20Gi
