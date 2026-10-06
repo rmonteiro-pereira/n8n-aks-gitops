@@ -1,0 +1,107 @@
+# How the Envoy data plane runs on this cluster.
+#
+# The Service annotations bind the load balancer to the STATIC public IP that
+# OpenTofu created in the main resource group. They are read by
+# cloud-provider-azure, not by Envoy Gateway. The cluster identity needs
+# Network Contributor on that IP -- and on the egress IP too, see
+# infra/azure/aks.tf for why.
+#
+# externalTrafficPolicy Local keeps the client address, which n8n uses (via
+# X-Forwarded-For) in webhook data and audit entries.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: public
+  namespace: {{ .Values.gateway.namespace }}
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: {{ .Values.gateway.proxyReplicas }}
+        container:
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+      envoyPDB:
+        minAvailable: 1
+      envoyService:
+        type: LoadBalancer
+        externalTrafficPolicy: Local
+        annotations:
+          service.beta.kubernetes.io/azure-pip-name: {{ required "azure.ingress.publicIpName is required" .Values.azure.ingress.publicIpName | quote }}
+          service.beta.kubernetes.io/azure-load-balancer-resource-group: {{ required "azure.ingress.publicIpResourceGroup is required" .Values.azure.ingress.publicIpResourceGroup | quote }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: envoy
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: public
+    namespace: {{ .Values.gateway.namespace }}
+---
+# The Gateway API fills in defaults (group, kind, mode, ...) on admission.
+# Every one of them is declared explicitly in this repository: a manifest
+# without them leaves the Application OutOfSync-but-Healthy forever, serving
+# traffic while the dashboard lies -- and that state hides real drift.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ .Values.gateway.name }}
+  namespace: {{ .Values.gateway.namespace }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.acme.issuer }}
+spec:
+  gatewayClassName: envoy
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      hostname: {{ required "host is required" .Values.host | quote }}
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: {{ .Values.host | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - group: ""
+            kind: Secret
+            name: n8n-tls
+      allowedRoutes:
+        namespaces:
+          from: All
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: https-redirect
+  namespace: {{ .Values.gateway.namespace }}
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ .Values.gateway.name }}
+      sectionName: http
+  hostnames:
+    - {{ .Values.host | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301

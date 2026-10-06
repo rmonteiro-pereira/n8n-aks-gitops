@@ -1,0 +1,34 @@
+# Everything that CONFIGURES the operators installed in the earlier waves:
+# storage class, secret store, certificate issuers, the Gateway itself.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-config
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ .Values.project }}
+  source:
+    repoURL: {{ required "repoURL is required" .Values.repoURL | quote }}
+    targetRevision: {{ .Values.targetRevision | quote }}
+    path: gitops/platform-config
+    helm:
+      releaseName: platform-config
+      valuesObject:
+        host: {{ required "host is required" .Values.host | quote }}
+        azure:
+          tenantId: {{ .Values.azure.tenantId | quote }}
+          keyVaultUrl: {{ .Values.azure.keyVaultUrl | quote }}
+          ingress:
+            {{- toYaml .Values.azure.ingress | nindent 12 }}
+        acme:
+          {{- toYaml .Values.acme | nindent 10 }}
+        monitoring:
+          enabled: {{ .Values.monitoring.enabled }}
+  destination:
+    {{- include "apps.destination" "envoy-gateway-system" | nindent 4 }}
+  syncPolicy:
+    {{- include "apps.syncPolicy" . | nindent 4 }}

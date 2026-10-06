@@ -1,0 +1,10 @@
+# Stand-in values so CI can render and validate the chart. Not used by ArgoCD.
+host: n8n.example.com
+azure:
+  tenantId: 00000000-0000-0000-0000-000000000000
+  keyVaultUrl: https://kv-example.vault.azure.net/
+  ingress:
+    publicIpName: pip-example-ingress
+    publicIpResourceGroup: rg-example
+acme:
+  email: ops@example.com

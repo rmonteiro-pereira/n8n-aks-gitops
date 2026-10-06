@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: n8n-main
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+    app.kubernetes.io/component: main
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: a rolling update runs the old and the new
+  # main side by side, and two mains without multi-main mode both fire every
+  # schedule trigger. A few seconds of editor downtime is the cheaper side of
+  # that trade; production webhooks are served by the webhook processors and
+  # keep answering throughout.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: n8n
+      app.kubernetes.io/component: main
+  template:
+    metadata:
+      labels:
+        {{- include "n8n.labels" . | nindent 8 }}
+        app.kubernetes.io/component: main
+      annotations:
+        {{- include "n8n.configChecksum" . | nindent 8 }}
+    spec:
+      {{- include "n8n.podSecurity" . | nindent 6 }}
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: n8n
+          image: {{ include "n8n.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "n8n.env" . | nindent 10 }}
+          ports:
+            - name: http
+              containerPort: 5678
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            # Database migrations run on start-up; a version upgrade can take
+            # minutes on a large executions table.
+            failureThreshold: 120
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 4
+          readinessProbe:
+            httpGet:
+              path: /healthz/readiness
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.main.resources | nindent 12 }}
+          {{- include "n8n.containerSecurity" . | nindent 10 }}
+          {{- include "n8n.volumeMounts" . | nindent 10 }}
+      {{- include "n8n.volumes" . | nindent 6 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n-main
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+    app.kubernetes.io/component: main
+spec:
+  selector:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/component: main
+  ports:
+    - name: http
+      port: 5678
+      targetPort: http

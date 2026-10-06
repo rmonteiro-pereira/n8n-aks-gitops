@@ -1,0 +1,28 @@
+# Copy to terraform.tfvars (git-ignored) and fill in.
+
+subscription_id = "00000000-0000-0000-0000-000000000000"
+
+location       = "eastus2"
+region_code    = "eus2"
+
+n8n_hostname    = "n8n.example.com"
+acme_email      = "ops@example.com"
+gitops_repo_url = "https://github.com/your-org/n8n-aks-gitops.git"
+
+# az ad signed-in-user show --query id -o tsv
+admin_principal_ids = ["00000000-0000-0000-0000-000000000000"]
+
+# Restrict the API server to where operators and CI come from.
+# apiserver_allowed_cidrs = ["203.0.113.10/32"]
+
+# Let this stack own the A record (otherwise create it yourself).
+# dns_zone = {
+#   name                = "example.com"
+#   resource_group_name = "rg-dns"
+# }
+
+# budget = {
+#   amount         = 400
+#   start_date     = "2026-11-01T00:00:00Z"
+#   contact_emails = ["ops@example.com"]
+# }

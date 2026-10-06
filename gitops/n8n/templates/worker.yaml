@@ -1,0 +1,150 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: n8n-worker
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  {{- if not .Values.worker.autoscaling.enabled }}
+  # With autoscaling on, `replicas` is deliberately absent: KEDA owns it, and
+  # declaring it here would have every ArgoCD sync fight the autoscaler.
+  replicas: {{ .Values.worker.autoscaling.minReplicas }}
+  {{- end }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: n8n
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "n8n.labels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      annotations:
+        {{- include "n8n.configChecksum" . | nindent 8 }}
+    spec:
+      {{- include "n8n.podSecurity" . | nindent 6 }}
+      # Longer than the graceful shutdown below, so the kubelet never kills a
+      # worker that is still inside its own drain window.
+      terminationGracePeriodSeconds: {{ add .Values.worker.gracefulShutdownSeconds 30 }}
+      {{- include "n8n.spread" "worker" | nindent 6 }}
+      containers:
+        - name: n8n
+          image: {{ include "n8n.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["worker", "--concurrency={{ .Values.worker.concurrency }}"]
+          {{- include "n8n.env" . | nindent 10 }}
+            - name: N8N_GRACEFUL_SHUTDOWN_TIMEOUT
+              value: {{ .Values.worker.gracefulShutdownSeconds | quote }}
+          ports:
+            - name: http
+              containerPort: 5678
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 4
+          readinessProbe:
+            httpGet:
+              path: /healthz/readiness
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          {{- include "n8n.containerSecurity" . | nindent 10 }}
+          {{- include "n8n.volumeMounts" . | nindent 10 }}
+        {{- include "n8n.runnerContainer" . | nindent 8 }}
+      {{- include "n8n.volumes" . | nindent 6 }}
+        - name: runner-tmp
+          emptyDir: {}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: n8n-worker
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: n8n
+      app.kubernetes.io/component: worker
+{{- if .Values.worker.autoscaling.enabled }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: n8n-valkey
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+spec:
+  secretTargetRef:
+    - parameter: password
+      name: {{ .Values.secrets.name }}
+      key: redis-password
+---
+# Two triggers, and KEDA takes the larger answer:
+#
+#   wait    jobs nobody has picked up yet -> scale OUT on backlog
+#   active  jobs being executed right now -> do not scale IN under them
+#
+# Scaling on the backlog alone has a blind spot: the moment workers drain
+# the wait list it reads zero, and KEDA would shrink the pool while those
+# same workers are in the middle of long executions.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: n8n-worker
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: n8n-worker
+  minReplicaCount: {{ .Values.worker.autoscaling.minReplicas }}
+  maxReplicaCount: {{ .Values.worker.autoscaling.maxReplicas }}
+  pollingInterval: 15
+  cooldownPeriod: {{ .Values.worker.autoscaling.cooldownSeconds }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: {{ .Values.worker.autoscaling.cooldownSeconds }}
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 60
+  triggers:
+    - type: redis
+      name: waiting
+      metadata:
+        address: {{ include "n8n.valkey.host" . }}.{{ .Release.Namespace }}.svc:6379
+        listName: bull:jobs:wait
+        listLength: {{ .Values.worker.autoscaling.waitingJobsPerWorker | quote }}
+      authenticationRef:
+        name: n8n-valkey
+    - type: redis
+      name: active
+      metadata:
+        address: {{ include "n8n.valkey.host" . }}.{{ .Release.Namespace }}.svc:6379
+        listName: bull:jobs:active
+        listLength: {{ .Values.worker.concurrency | quote }}
+      authenticationRef:
+        name: n8n-valkey
+{{- end }}

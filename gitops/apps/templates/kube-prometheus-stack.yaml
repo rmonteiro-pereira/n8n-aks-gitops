@@ -1,0 +1,81 @@
+{{- if .Values.monitoring.enabled }}
+# After platform-config: that wave creates the `monitoring` namespace and the
+# ExternalSecret with the Grafana admin password. The other way round Grafana
+# waits on a Secret that only a later wave would deliver, never turns healthy,
+# and the waves deadlock.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ .Values.project }}
+  source:
+    repoURL: {{ .Values.charts.kubePrometheusStack.repoURL }}
+    chart: {{ .Values.charts.kubePrometheusStack.chart }}
+    targetRevision: {{ .Values.charts.kubePrometheusStack.version | quote }}
+    helm:
+      releaseName: kube-prometheus-stack
+      valuesObject:
+        # Managed control plane: none of these are reachable on AKS, and the
+        # dataplane is Cilium, so there is no kube-proxy either. Left on, each
+        # one is a permanently firing "target down" alert.
+        kubeEtcd:
+          enabled: false
+        kubeControllerManager:
+          enabled: false
+        kubeScheduler:
+          enabled: false
+        kubeProxy:
+          enabled: false
+        prometheus:
+          prometheusSpec:
+            retention: 15d
+            # Pick up monitors and rules from every namespace, not only the
+            # ones labelled with this Helm release.
+            ruleSelectorNilUsesHelmValues: false
+            serviceMonitorSelectorNilUsesHelmValues: false
+            podMonitorSelectorNilUsesHelmValues: false
+            probeSelectorNilUsesHelmValues: false
+            resources:
+              requests:
+                cpu: 200m
+                memory: 1Gi
+              limits:
+                memory: 3Gi
+            storageSpec:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: zrs-ssd
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 50Gi
+        alertmanager:
+          alertmanagerSpec:
+            storage:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: zrs-ssd
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 2Gi
+        grafana:
+          admin:
+            existingSecret: grafana-admin
+            userKey: admin-user
+            passwordKey: admin-password
+          persistence:
+            enabled: true
+            storageClassName: zrs-ssd
+            size: 5Gi
+  destination:
+    {{- include "apps.destination" "monitoring" | nindent 4 }}
+  syncPolicy:
+    {{- include "apps.syncPolicy" . | nindent 4 }}
+{{- end }}

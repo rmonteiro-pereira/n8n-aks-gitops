@@ -1,0 +1,69 @@
+# Defaults shared by every environment. What differs per environment -- and
+# everything that comes from Azure -- lives in env/<environment>.yaml, which
+# scripts/render-env-values.sh generates from the OpenTofu outputs.
+
+repoURL: ""
+targetRevision: main
+project: n8n-platform
+
+host: ""
+
+azure:
+  tenantId: ""
+  keyVaultUrl: ""
+  # CIDR of the API server subnet (API Server VNet Integration). Empty means
+  # the database pods get no route to the API server under default-deny and
+  # CloudNativePG cannot initialise them.
+  apiServerCidr: ""
+  ingress:
+    publicIpName: ""
+    publicIpResourceGroup: ""
+  identities:
+    externalSecrets: ""
+    postgresBackup: ""
+  backup:
+    destinationPath: ""
+
+acme:
+  email: ""
+  # Start on staging: Let's Encrypt production rate-limits failed validations,
+  # and the first sync usually runs before DNS has propagated. Switch to
+  # letsencrypt-prod once the staging certificate is issued.
+  issuer: letsencrypt-staging
+
+monitoring:
+  enabled: true
+
+# Overrides for the n8n chart (gitops/n8n/values.yaml), merged over what this
+# chart derives from the environment. Sizing, timezone, replica counts.
+n8n:
+  values: {}
+
+# Upstream charts, pinned. Renovate proposes the bumps (renovate.json).
+charts:
+  envoyGateway:
+    # Helm-in-OCI, NOT ArgoCD's native OCI source: no `oci://` scheme, and a
+    # repository Secret with enableOCI (templates/repo-envoy-gateway.yaml).
+    # With `oci://` ArgoCD ignores the `chart` field, asks the registry for a
+    # path that does not exist and reports the resulting 401 as if it were a
+    # missing credential. `registry-1.docker.io`, not `docker.io`: only the
+    # Helm client resolves the alias.
+    repoURL: registry-1.docker.io/envoyproxy
+    chart: gateway-helm
+    version: 1.9.2
+  cloudnativePg:
+    repoURL: https://cloudnative-pg.github.io/charts
+    chart: cloudnative-pg
+    version: 0.29.1
+  externalSecrets:
+    repoURL: https://charts.external-secrets.io
+    chart: external-secrets
+    version: 2.11.0
+  certManager:
+    repoURL: https://charts.jetstack.io
+    chart: cert-manager
+    version: v1.21.2
+  kubePrometheusStack:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    version: 91.9.0

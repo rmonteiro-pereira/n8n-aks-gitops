@@ -1,0 +1,203 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+# Default deny, in both directions, for every pod in the namespace. What
+# follows are the only paths that exist.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# n8n (main, webhook, worker).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: n8n
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: n8n
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    # User traffic, only through the Gateway.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.gatewayNamespace }}
+      ports:
+        - protocol: TCP
+          port: 5678
+    # Metrics scrape.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.monitoringNamespace }}
+      ports:
+        - protocol: TCP
+          port: 5678
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ .Values.postgres.clusterName }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: n8n-valkey
+      ports:
+        - protocol: TCP
+          port: 6379
+    # The internet, minus everything private. Workflows call arbitrary
+    # external services, so the destination cannot be narrowed further --
+    # but the cluster, the VNet and the node metadata endpoint can be, and
+    # are, excluded.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- toYaml $np.egressDeniedCidrs | nindent 14 }}
+    {{- range $np.egressAllowedPrivate }}
+    - to:
+        - ipBlock:
+            cidr: {{ .cidr }}
+      ports:
+        {{- range .ports }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: valkey
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: n8n-valkey
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: n8n
+        # KEDA reads the queue length to scale the workers.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.keda.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $np.keda.podLabels | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 6379
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ .Values.postgres.clusterName }}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: n8n
+        # Streaming replication between instances.
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ .Values.postgres.clusterName }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    # The operator polls each instance manager for status; without this it
+    # sees every instance as unreachable and never promotes or heals.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.operatorNamespace }}
+      ports:
+        - protocol: TCP
+          port: 8000
+        - protocol: TCP
+          port: 5432
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $np.monitoringNamespace }}
+      ports:
+        - protocol: TCP
+          port: 9187
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ .Values.postgres.clusterName }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- if $np.apiServer.cidrs }}
+    # ─────────────────────────────────────────────────────────────────────
+    # The API server. The instance manager inside every database pod needs
+    # it; under default-deny, without this rule, initdb dies with
+    # "error while waiting for the API server to be reachable: i/o timeout".
+    #
+    # It has to be an ipBlock on the API server's REAL address. Allowing the
+    # `kubernetes` Service does nothing: with the Cilium dataplane, Service
+    # translation happens before policy is evaluated, so the rule is matched
+    # against the backend address. On AKS that backend is only a stable,
+    # private address when API Server VNet Integration is on -- which is why
+    # infra/azure enables it and exports the subnet CIDR that lands here.
+    # ─────────────────────────────────────────────────────────────────────
+    - to:
+        {{- range $np.apiServer.cidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      ports:
+        {{- range $np.apiServer.ports }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- end }}
+    {{- if .Values.postgres.backup.enabled }}
+    # Backups: Blob Storage and the Entra ID token endpoint, HTTPS only.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- toYaml $np.egressDeniedCidrs | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 443
+    {{- end }}
+{{- end }}

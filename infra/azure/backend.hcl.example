@@ -1,0 +1,6 @@
+# Copy to backend.hcl (git-ignored). Values are printed by scripts/create-tfstate.sh.
+#   tofu init -backend-config=backend.hcl
+resource_group_name  = "rg-tfstate"
+storage_account_name = "sttfstateXXXXX"
+container_name       = "tfstate"
+key                  = "n8n-prod/azure.tfstate"

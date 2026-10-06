@@ -1,0 +1,218 @@
+# Public FQDN. Injected per environment by gitops/apps/templates/n8n.yaml.
+host: n8n.example.com
+
+timezone: Etc/UTC
+
+image:
+  repository: docker.n8n.io/n8nio/n8n
+  tag: "2.41.7"
+  pullPolicy: IfNotPresent
+
+# Extra environment for every n8n process (main, webhook, worker). Anything
+# set here overrides the defaults in templates/configmap.yaml.
+extraEnv: {}
+
+# ─────────────────────────────────────────────────────────────────────────
+# NODES_EXCLUDE *replaces* n8n's default, it does not add to it. The default
+# is exactly the two entries below: the node that runs arbitrary shell
+# commands in the pod and the one that reads the pod's filesystem. Setting
+# this variable to exclude some other node -- and forgetting to repeat these
+# two -- silently re-enables command execution for every workflow author.
+# Add to this list; never start it over.
+# ─────────────────────────────────────────────────────────────────────────
+nodesExclude:
+  - n8n-nodes-base.executeCommand
+  - n8n-nodes-base.localFileTrigger
+
+executions:
+  # Hours of execution history kept in Postgres. This is the main driver of
+  # database size.
+  maxAgeHours: 336
+  pruneMaxCount: 50000
+
+# ── Processes ─────────────────────────────────────────────────────────────
+
+# The main process: editor UI, REST API, schedule/polling triggers, and the
+# test-webhook endpoints. Exactly ONE replica: running several mains needs
+# n8n's multi-main mode, which is a licensed (Enterprise) feature. Without it
+# two mains fire every schedule trigger twice.
+main:
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 1536Mi
+
+# Webhook processors: receive production webhook calls and enqueue them.
+# Stateless, so they scale horizontally and survive node drains.
+webhook:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+# Workers: pull executions from the queue and run them.
+worker:
+  # Executions one worker runs in parallel.
+  concurrency: 10
+  # Seconds a worker gets to finish what it is running when it is asked to
+  # stop (scale-in, node drain, rollout). Executions still running after this
+  # are lost and marked as crashed.
+  gracefulShutdownSeconds: 300
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  autoscaling:
+    # KEDA (AKS managed add-on). Disabled => a fixed `minReplicas`.
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    # Jobs waiting in the queue, per worker, that trigger a scale-out.
+    waitingJobsPerWorker: 5
+    cooldownSeconds: 300
+
+# Task runners execute the code of Code nodes. One sidecar per worker.
+taskRunners:
+  image:
+    repository: n8nio/runners
+    # Must match the n8n version; defaults to image.tag.
+    tag: ""
+  # Seconds a single Code-node task may run.
+  taskTimeoutSeconds: 300
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+# ── Edge ──────────────────────────────────────────────────────────────────
+
+gateway:
+  enabled: true
+  name: public
+  namespace: envoy-gateway-system
+  # Envoy applies a 15 s timeout to the WHOLE request, response included, on
+  # any route that does not declare one. A webhook that answers "when the
+  # last node finishes" is cut at 15 s with a 504 while the execution carries
+  # on and succeeds. Both are therefore explicit.
+  timeouts:
+    editor: 300s
+    webhook: 600s
+
+# ── Secrets ───────────────────────────────────────────────────────────────
+
+secrets:
+  # Name of the Secret holding `encryption-key`, `redis-password` and
+  # `runners-auth-token`.
+  name: n8n-secrets
+  externalSecret:
+    # Disabled => create the Secret above yourself (local test, other clouds).
+    enabled: true
+    storeName: azure-key-vault
+    keys:
+      encryptionKey: n8n-encryption-key
+      redisPassword: n8n-redis-password
+      runnersAuthToken: n8n-runners-auth-token
+
+# ── PostgreSQL (CloudNativePG) ────────────────────────────────────────────
+
+postgres:
+  # Also the name of the ServiceAccount the instance pods run as, which is
+  # the subject of the backup identity in infra/azure. Renaming it here
+  # without renaming it there breaks backups.
+  clusterName: n8n-db
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.9
+  instances: 2
+  storage:
+    size: 20Gi
+    storageClass: zrs-ssd
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      memory: 2Gi
+  parameters:
+    max_connections: "200"
+  backup:
+    enabled: false
+    # https://<account>.blob.core.windows.net/<container>
+    destinationPath: ""
+    # Client ID of the user-assigned identity allowed to write there.
+    clientId: ""
+    # Folder inside the container. Defaults to clusterName; bump it (n8n-db-r1,
+    # n8n-db-r2, ...) every time the database is restored from backup.
+    serverName: ""
+    retention: 30d
+    # Daily base backup, 6-field cron (with seconds), UTC.
+    schedule: "0 0 5 * * *"
+
+  # Create the Cluster from a backup instead of empty. Only read when the
+  # Cluster resource is created -- see docs/operations.md, "Restore".
+  recovery:
+    enabled: false
+    # backup.serverName the backups were written under.
+    sourceServerName: n8n-db
+    # RFC 3339 timestamp for point-in-time recovery; empty = latest.
+    targetTime: ""
+
+# ── Queue (Valkey) ────────────────────────────────────────────────────────
+
+valkey:
+  image:
+    repository: valkey/valkey
+    tag: 8.1.10-alpine
+  storage:
+    size: 5Gi
+    storageClass: zrs-ssd
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+# ── Network policy ────────────────────────────────────────────────────────
+
+networkPolicy:
+  enabled: true
+  # Where the API server lives, for the database pods (the CloudNativePG
+  # instance manager talks to it). On AKS this is the API server subnet.
+  apiServer:
+    cidrs: []
+    ports: [443]
+  # n8n pods may reach the internet but not these ranges: the VNet, other
+  # pods and services, and the instance metadata endpoint. A workflow is
+  # user-supplied code that makes HTTP requests; without this, every workflow
+  # author can probe the cluster network and ask the node's metadata service
+  # for a token.
+  egressDeniedCidrs:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 169.254.0.0/16
+    - 100.64.0.0/10
+  # Private destinations workflows legitimately need (a database in a peered
+  # network, an internal API). Each entry: {cidr: ..., ports: [...]}.
+  egressAllowedPrivate: []
+  gatewayNamespace: envoy-gateway-system
+  monitoringNamespace: monitoring
+  operatorNamespace: cnpg-system
+  keda:
+    namespace: kube-system
+    podLabels:
+      app: keda-operator
+
+# ── Monitoring ────────────────────────────────────────────────────────────
+
+monitoring:
+  # PodMonitors and alert rules. Needs the Prometheus Operator CRDs.
+  enabled: true

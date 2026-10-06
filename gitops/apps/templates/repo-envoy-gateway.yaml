@@ -1,0 +1,21 @@
+# Repository registration for the Envoy Gateway chart. It carries no secret
+# (the chart is public), so it is plain stringData in git. What matters is
+# `enableOCI`: without it ArgoCD treats the URL as a classic Helm repository.
+#
+# It is delivered by the app-of-apps itself, one wave ahead of the Application
+# that needs it. Two Applications in the same wave have no order between them.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: repo-envoy-gateway
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: repository
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+type: Opaque
+stringData:
+  name: envoy-gateway
+  type: helm
+  url: {{ .Values.charts.envoyGateway.repoURL }}
+  enableOCI: "true"

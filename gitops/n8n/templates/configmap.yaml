@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: n8n-env
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+data:
+  # ── Where n8n lives ────────────────────────────────────────────────────
+  N8N_HOST: {{ .Values.host | quote }}
+  N8N_PORT: "5678"
+  N8N_PROTOCOL: https
+  N8N_EDITOR_BASE_URL: "https://{{ .Values.host }}/"
+  N8N_WEBHOOK_URL: "https://{{ .Values.host }}/"
+  # One proxy (the Gateway) sits in front; trust exactly one hop of
+  # X-Forwarded-*.
+  N8N_PROXY_HOPS: "1"
+  GENERIC_TIMEZONE: {{ .Values.timezone | quote }}
+  TZ: {{ .Values.timezone | quote }}
+
+  # ── Queue mode ─────────────────────────────────────────────────────────
+  EXECUTIONS_MODE: queue
+  QUEUE_BULL_REDIS_HOST: {{ include "n8n.valkey.host" . }}
+  QUEUE_BULL_REDIS_PORT: "6379"
+  QUEUE_HEALTH_CHECK_ACTIVE: "true"
+  # Manual runs from the editor go to the workers as well, so the main
+  # process never executes workflow code.
+  OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS: "true"
+
+  # ── Database ───────────────────────────────────────────────────────────
+  DB_TYPE: postgresdb
+  DB_POSTGRESDB_HOST: {{ .Values.postgres.clusterName }}-rw
+  DB_POSTGRESDB_PORT: "5432"
+  DB_POSTGRESDB_DATABASE: n8n
+  DB_POSTGRESDB_USER: n8n
+  DB_POSTGRESDB_SSL_ENABLED: "true"
+  DB_POSTGRESDB_SSL_CA_FILE: /etc/n8n/db-ca/ca.crt
+  DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED: "true"
+
+  # ── Retention ──────────────────────────────────────────────────────────
+  EXECUTIONS_DATA_PRUNE: "true"
+  EXECUTIONS_DATA_MAX_AGE: {{ .Values.executions.maxAgeHours | quote }}
+  EXECUTIONS_DATA_PRUNE_MAX_COUNT: {{ .Values.executions.pruneMaxCount | quote }}
+
+  # ── Hardening ──────────────────────────────────────────────────────────
+  NODES_EXCLUDE: {{ .Values.nodesExclude | toJson | quote }}
+  N8N_BLOCK_ENV_ACCESS_IN_NODE: "true"
+  N8N_DIAGNOSTICS_ENABLED: "false"
+  # Only community packages n8n has vetted can be installed from the UI.
+  N8N_UNVERIFIED_PACKAGES_ENABLED: "false"
+
+  # ── Task runners ───────────────────────────────────────────────────────
+  # External mode: Code-node code runs in the `runners` sidecar of each
+  # worker, not inside the n8n process that holds the encryption key and the
+  # database connection. (Internal mode is deprecated upstream.)
+  N8N_RUNNERS_MODE: external
+  N8N_RUNNERS_BROKER_LISTEN_ADDRESS: 127.0.0.1
+  N8N_RUNNERS_TASK_TIMEOUT: {{ .Values.taskRunners.taskTimeoutSeconds | quote }}
+
+  # ── Operations ─────────────────────────────────────────────────────────
+  N8N_METRICS: "true"
+  N8N_METRICS_INCLUDE_QUEUE_METRICS: "true"
+  N8N_LOG_FORMAT: json
+  # The home directory is an emptyDir: community packages installed from the
+  # UI are recorded in the database and reinstalled when a pod starts.
+  N8N_REINSTALL_MISSING_PACKAGES: "true"
+  {{- range $k, $v := .Values.extraEnv }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}

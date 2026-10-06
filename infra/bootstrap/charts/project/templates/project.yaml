@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: n8n-platform
+  namespace: {{ .Release.Namespace }}
+spec:
+  description: n8n and the platform components it runs on.
+  sourceRepos:
+    - {{ required "repoUrl is required" .Values.repoUrl | quote }}
+    {{- range .Values.chartRepos }}
+    - {{ . | quote }}
+    {{- end }}
+  destinations:
+    {{- range .Values.namespaces }}
+    - server: https://kubernetes.default.svc
+      namespace: {{ . }}
+    {{- end }}
+  # The platform Applications install CRDs, webhooks and cluster roles.
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"

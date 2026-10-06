@@ -1,0 +1,29 @@
+# Edge: Envoy Gateway, implementing the Gateway API. Its chart also installs
+# the Gateway API CRDs, which is why it leads the order -- cert-manager only
+# enables its Gateway API support if those CRDs exist when it starts.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: envoy-gateway
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ .Values.project }}
+  source:
+    repoURL: {{ .Values.charts.envoyGateway.repoURL }}
+    chart: {{ .Values.charts.envoyGateway.chart }}
+    targetRevision: {{ .Values.charts.envoyGateway.version | quote }}
+    helm:
+      releaseName: envoy-gateway
+      valuesObject:
+        deployment:
+          replicas: 2
+        podDisruptionBudget:
+          minAvailable: 1
+  destination:
+    {{- include "apps.destination" "envoy-gateway-system" | nindent 4 }}
+  syncPolicy:
+    {{- include "apps.syncPolicy" . | nindent 4 }}

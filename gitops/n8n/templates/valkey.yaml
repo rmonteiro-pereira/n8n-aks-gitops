@@ -1,0 +1,120 @@
+# The execution queue (BullMQ on a Redis-compatible server).
+#
+# A single instance with an append-only file on a zone-redundant disk. It is
+# a single point of failure for *starting* executions: while it is down,
+# webhooks are refused and triggers do not enqueue. Nothing is lost that was
+# already queued -- the AOF brings the queue back with the pod. If that
+# window is not acceptable, replace this file with a managed Redis and point
+# QUEUE_BULL_REDIS_* at it.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: n8n-valkey
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+    app.kubernetes.io/component: valkey
+spec:
+  serviceName: n8n-valkey
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: n8n-valkey
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: n8n-valkey
+        app.kubernetes.io/part-of: n8n
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: valkey
+          image: {{ .Values.valkey.image.repository }}:{{ .Values.valkey.image.tag }}
+          imagePullPolicy: IfNotPresent
+          # $(VALKEY_PASSWORD) is expanded by the kubelet from the env below,
+          # before any shell exists.
+          #
+          # noeviction is required by BullMQ: any other policy lets the
+          # server drop queue keys under memory pressure, i.e. lose jobs.
+          args:
+            - valkey-server
+            - --requirepass
+            - $(VALKEY_PASSWORD)
+            - --appendonly
+            - "yes"
+            - --maxmemory-policy
+            - noeviction
+            - --dir
+            - /data
+          env:
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name }}
+                  key: redis-password
+            # Read by valkey-cli in the probes.
+            - name: REDISCLI_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name }}
+                  key: redis-password
+          ports:
+            - name: redis
+              containerPort: 6379
+          livenessProbe:
+            exec:
+              command: ["valkey-cli", "ping"]
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 4
+          readinessProbe:
+            exec:
+              command: ["valkey-cli", "ping"]
+            periodSeconds: 5
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.valkey.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.valkey.storage.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.valkey.storage.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n-valkey
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+    app.kubernetes.io/component: valkey
+spec:
+  selector:
+    app.kubernetes.io/name: n8n-valkey
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis

@@ -1,0 +1,126 @@
+# n8n's database: workflows, credentials (encrypted), users and execution
+# history. A primary and a hot standby in different zones, managed by
+# CloudNativePG, with failover handled by the operator.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ .Values.postgres.clusterName }}
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  instances: {{ .Values.postgres.instances }}
+  imageName: {{ .Values.postgres.imageName }}
+
+  # `bootstrap` is read once, when the Cluster is created. Recovery is
+  # therefore not something you switch on for a running database: it is how a
+  # NEW Cluster is born from the backups of an old one. docs/operations.md
+  # has the procedure.
+  bootstrap:
+    {{- if .Values.postgres.recovery.enabled }}
+    recovery:
+      source: origin
+      database: n8n
+      owner: n8n
+      {{- with .Values.postgres.recovery.targetTime }}
+      recoveryTarget:
+        targetTime: {{ . | quote }}
+      {{- end }}
+    {{- else }}
+    initdb:
+      database: n8n
+      owner: n8n
+    {{- end }}
+
+  {{- if .Values.postgres.recovery.enabled }}
+  externalClusters:
+    - name: origin
+      barmanObjectStore:
+        destinationPath: {{ required "postgres.backup.destinationPath is required for recovery" .Values.postgres.backup.destinationPath | quote }}
+        serverName: {{ required "postgres.recovery.sourceServerName is required" .Values.postgres.recovery.sourceServerName | quote }}
+        azureCredentials:
+          inheritFromAzureAD: true
+        wal:
+          compression: gzip
+  {{- end }}
+
+  storage:
+    size: {{ .Values.postgres.storage.size }}
+    {{- with .Values.postgres.storage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+
+  resources:
+    {{- toYaml .Values.postgres.resources | nindent 4 }}
+
+  postgresql:
+    parameters:
+      {{- toYaml .Values.postgres.parameters | nindent 6 }}
+
+  affinity:
+    enablePodAntiAffinity: true
+    podAntiAffinityType: required
+    topologyKey: kubernetes.io/hostname
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          cnpg.io/cluster: {{ .Values.postgres.clusterName }}
+
+  {{- if .Values.postgres.backup.enabled }}
+  # ───────────────────────────────────────────────────────────────────────
+  # Continuous backup to Azure Blob Storage with workload identity -- no
+  # storage key exists anywhere.
+  #
+  # The identity is assumed by the ServiceAccount CloudNativePG creates for
+  # the instance pods, which is named after this Cluster. The annotation and
+  # the label below are what make the workload-identity webhook inject the
+  # federated token into those pods; the federated credential on the Azure
+  # side (infra/azure/identity.tf) names the same ServiceAccount.
+  #
+  # `barmanObjectStore` is the in-tree backup path. CloudNativePG has
+  # deprecated it in favour of the Barman Cloud plugin; it is still served
+  # by the pinned operator version. Moving to the plugin is a change to this
+  # block and the ScheduledBackup below (`method: plugin`), not to the data.
+  # ───────────────────────────────────────────────────────────────────────
+  serviceAccountTemplate:
+    metadata:
+      annotations:
+        azure.workload.identity/client-id: {{ required "postgres.backup.clientId is required when backups are enabled" .Values.postgres.backup.clientId | quote }}
+  inheritedMetadata:
+    labels:
+      azure.workload.identity/use: "true"
+  backup:
+    retentionPolicy: {{ .Values.postgres.backup.retention }}
+    barmanObjectStore:
+      destinationPath: {{ required "postgres.backup.destinationPath is required when backups are enabled" .Values.postgres.backup.destinationPath | quote }}
+      # Folder inside the container this Cluster writes to. A Cluster
+      # restored from backup must write to a NEW one: barman refuses to
+      # archive into a folder that already holds another timeline's WAL.
+      serverName: {{ .Values.postgres.backup.serverName | default .Values.postgres.clusterName | quote }}
+      azureCredentials:
+        inheritFromAzureAD: true
+      wal:
+        compression: gzip
+      data:
+        compression: gzip
+  {{- end }}
+{{- if .Values.postgres.backup.enabled }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ .Values.postgres.clusterName }}-daily
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.postgres.backup.schedule | quote }}
+  backupOwnerReference: self
+  # Take one as soon as the schedule is created, so a restore point exists
+  # from the first day and a broken backup path shows up immediately.
+  immediate: true
+  cluster:
+    name: {{ .Values.postgres.clusterName }}
+{{- end }}

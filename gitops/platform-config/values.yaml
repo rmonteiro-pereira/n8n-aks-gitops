@@ -1,0 +1,26 @@
+# Injected by gitops/apps/templates/platform-config.yaml.
+host: ""
+
+azure:
+  tenantId: ""
+  keyVaultUrl: ""
+  ingress:
+    publicIpName: ""
+    publicIpResourceGroup: ""
+
+acme:
+  email: ""
+  issuer: letsencrypt-staging
+
+monitoring:
+  enabled: true
+
+gateway:
+  name: public
+  namespace: envoy-gateway-system
+  proxyReplicas: 2
+
+# Must match the `eso` consumer in infra/azure/identity.tf.
+externalSecrets:
+  namespace: external-secrets
+  serviceAccount: external-secrets

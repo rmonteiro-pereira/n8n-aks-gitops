@@ -1,0 +1,39 @@
+# One wave after Envoy Gateway on purpose: `enableGatewayAPI` is evaluated at
+# start-up, and with the Gateway API CRDs absent cert-manager quietly runs
+# without the gateway-shim. Certificates for the Gateway would then never be
+# requested, with no error anywhere.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cert-manager
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ .Values.project }}
+  source:
+    repoURL: {{ .Values.charts.certManager.repoURL }}
+    chart: {{ .Values.charts.certManager.chart }}
+    targetRevision: {{ .Values.charts.certManager.version | quote }}
+    helm:
+      releaseName: cert-manager
+      valuesObject:
+        crds:
+          enabled: true
+          keep: true
+        config:
+          apiVersion: controller.config.cert-manager.io/v1alpha1
+          kind: ControllerConfiguration
+          enableGatewayAPI: true
+        resources:
+          requests:
+            cpu: 25m
+            memory: 96Mi
+          limits:
+            memory: 256Mi
+  destination:
+    {{- include "apps.destination" "cert-manager" | nindent 4 }}
+  syncPolicy:
+    {{- include "apps.syncPolicy" . | nindent 4 }}

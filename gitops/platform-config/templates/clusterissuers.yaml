@@ -1,0 +1,26 @@
+{{- range $name, $server := dict "letsencrypt-staging" "https://acme-staging-v02.api.letsencrypt.org/directory" "letsencrypt-prod" "https://acme-v02.api.letsencrypt.org/directory" }}
+---
+# HTTP-01 solved through the Gateway: cert-manager creates a temporary
+# HTTPRoute on the port-80 listener for /.well-known/acme-challenge/<token>.
+# That exact-path route is more specific than the HTTPS redirect below, so
+# the two coexist.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ $name }}
+spec:
+  acme:
+    server: {{ $server }}
+    email: {{ required "acme.email is required" $.Values.acme.email | quote }}
+    privateKeySecretRef:
+      name: {{ $name }}-account-key
+    solvers:
+      - http01:
+          gatewayHTTPRoute:
+            parentRefs:
+              - group: gateway.networking.k8s.io
+                kind: Gateway
+                name: {{ $.Values.gateway.name }}
+                namespace: {{ $.Values.gateway.namespace }}
+                sectionName: http
+{{- end }}

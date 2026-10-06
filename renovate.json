@@ -1,0 +1,75 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "prHourlyLimit": 4,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Upstream Helm charts pinned in the app-of-apps values",
+      "managerFilePatterns": ["/^gitops/apps/values\\.yaml$/"],
+      "matchStrings": [
+        "repoURL: (?<registryUrl>https://\\S+)\\s+chart: (?<depName>\\S+)\\s+version: (?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "helm"
+    },
+    {
+      "customType": "regex",
+      "description": "Envoy Gateway chart (Helm in OCI)",
+      "managerFilePatterns": ["/^gitops/apps/values\\.yaml$/"],
+      "matchStrings": [
+        "repoURL: registry-1\\.docker\\.io/envoyproxy\\s+chart: gateway-helm\\s+version: (?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "envoyproxy/gateway-helm",
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "n8n image (the task-runner image follows the same tag)",
+      "managerFilePatterns": ["/^gitops/n8n/(values|Chart)\\.yaml$/"],
+      "matchStrings": [
+        "repository: docker\\.n8n\\.io/n8nio/n8n\\s+tag: \"(?<currentValue>[^\"]+)\"",
+        "appVersion: \"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "n8nio/n8n",
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Valkey image",
+      "managerFilePatterns": ["/^gitops/n8n/values\\.yaml$/"],
+      "matchStrings": [
+        "repository: valkey/valkey\\s+tag: (?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "valkey/valkey",
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "PostgreSQL operand image",
+      "managerFilePatterns": ["/^gitops/n8n/values\\.yaml$/"],
+      "matchStrings": [
+        "imageName: (?<depName>ghcr\\.io/cloudnative-pg/postgresql):(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "ArgoCD chart installed by the bootstrap stack",
+      "managerFilePatterns": ["/^infra/bootstrap/variables\\.tf$/"],
+      "matchStrings": [
+        "variable \"argocd_version\"[\\s\\S]*?default\\s+= \"(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "argo-cd",
+      "registryUrlTemplate": "https://argoproj.github.io/argo-helm",
+      "datasourceTemplate": "helm"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "n8n and PostgreSQL majors are migrations, not bumps: a human approves them first.",
+      "matchPackageNames": ["n8nio/n8n", "ghcr.io/cloudnative-pg/postgresql"],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    }
+  ]
+}

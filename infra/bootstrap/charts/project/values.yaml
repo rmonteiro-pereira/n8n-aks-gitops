@@ -1,0 +1,21 @@
+repoUrl: ""
+
+# Upstream chart sources the platform Applications pull from. Keep in step
+# with gitops/apps/values.yaml: a chart from a repository missing here is
+# refused by the project, and the Application says so in its conditions.
+chartRepos:
+  - https://charts.jetstack.io
+  - https://charts.external-secrets.io
+  - https://cloudnative-pg.github.io/charts
+  - https://prometheus-community.github.io/helm-charts
+  - registry-1.docker.io/envoyproxy
+
+namespaces:
+  - argocd
+  - cert-manager
+  - cnpg-system
+  - envoy-gateway-system
+  - external-secrets
+  - kube-system
+  - monitoring
+  - n8n

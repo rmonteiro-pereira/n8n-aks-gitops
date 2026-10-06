@@ -1,0 +1,70 @@
+{{- if .Values.gateway.enabled }}
+# Routing by path, most specific first:
+#
+#   /webhook/...        -> webhook processors  (production webhook calls)
+#   /rest/push          -> main, no timeout    (the editor's live channel)
+#   everything else     -> main                (editor, REST API, forms,
+#                                               /webhook-test/, /webhook-waiting/)
+#
+# PathPrefix matches whole path elements, so `/webhook` does not swallow
+# `/webhook-test` or `/webhook-waiting`.
+#
+# Defaults the Gateway API would fill in (group, kind, weight, match type)
+# are written out so the live object equals the manifest -- see the note in
+# gitops/platform-config/templates/gateway.yaml.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: n8n
+  labels:
+    {{- include "n8n.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ .Values.gateway.name }}
+      namespace: {{ .Values.gateway.namespace }}
+      sectionName: https
+  hostnames:
+    - {{ .Values.host | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /webhook
+      timeouts:
+        request: {{ .Values.gateway.timeouts.webhook }}
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: n8n-webhook
+          port: 5678
+          weight: 1
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /rest/push
+      # 0s disables the request timeout: this is a long-lived WebSocket (or
+      # server-sent events) connection, kept open for as long as the editor
+      # tab is.
+      timeouts:
+        request: 0s
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: n8n-main
+          port: 5678
+          weight: 1
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      timeouts:
+        request: {{ .Values.gateway.timeouts.editor }}
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: n8n-main
+          port: 5678
+          weight: 1
+{{- end }}

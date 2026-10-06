@@ -1,0 +1,21 @@
+# Zone-redundant disks for everything that cannot be rebuilt.
+#
+# The node pool spans three zones. The built-in `managed-csi` class is LRS,
+# and an LRS disk is ZONAL: it is created in one zone and attaches only to
+# nodes of that zone. The day the autoscaler brings the replacement node up
+# somewhere else, every pod holding such a volume sits Pending with "volume
+# node affinity conflict" and no error on any controller. ZRS replicates the
+# disk across the zones, so the volume follows the pod.
+#
+# reclaimPolicy Retain: deleting a PVC (or a whole namespace) must not delete
+# the database disk with it.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: zrs-ssd
+provisioner: disk.csi.azure.com
+parameters:
+  skuName: StandardSSD_ZRS
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer

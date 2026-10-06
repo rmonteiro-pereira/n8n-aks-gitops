@@ -1,0 +1,39 @@
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.13.1
+          tofu_wrapper: false
+
+      - uses: azure/setup-helm@v4
+
+      - name: Install kubeconform
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz |
+            sudo tar xz -C /usr/local/bin kubeconform
+
+      - name: OpenTofu format and validate
+        run: make fmt tf-validate
+
+      - name: Helm lint
+        run: make helm-lint
+
+      - name: Render and validate manifests
+        run: make manifests
+
+      - name: Shellcheck
+        run: make shellcheck

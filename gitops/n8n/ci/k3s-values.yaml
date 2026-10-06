@@ -1,0 +1,35 @@
+# Overrides for a single-node local cluster (k3s, kind): no Azure, no Gateway,
+# no Prometheus. Used by the smoke test described in docs/local-smoke-test.md.
+host: n8n.localtest.me
+
+secrets:
+  externalSecret:
+    enabled: false
+
+postgres:
+  instances: 1
+  storage:
+    storageClass: ""
+
+valkey:
+  storage:
+    storageClass: ""
+
+webhook:
+  replicas: 1
+
+worker:
+  autoscaling:
+    minReplicas: 1
+    maxReplicas: 3
+    cooldownSeconds: 60
+
+gateway:
+  enabled: false
+
+monitoring:
+  enabled: false
+
+networkPolicy:
+  keda:
+    namespace: keda

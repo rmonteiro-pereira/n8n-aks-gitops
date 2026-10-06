@@ -1,0 +1,65 @@
+# ArgoCD is not exposed. Reach the UI with
+#   kubectl -n argocd port-forward svc/argocd-server 8080:443
+# and sign in as admin with the generated initial secret, then rotate it.
+
+dex:
+  enabled: false
+
+notifications:
+  enabled: false
+
+configs:
+  cm:
+    # Sync waves between Applications only mean something if ArgoCD can tell
+    # when a child Application is healthy. The health check for the
+    # Application kind was removed from the defaults in 1.8; without this the
+    # app-of-apps considers every child "healthy" the instant it is created
+    # and the waves in gitops/apps collapse into a race.
+    resource.customizations.health.argoproj.io_Application: |
+      hs = {}
+      hs.status = "Progressing"
+      hs.message = ""
+      if obj.status ~= nil then
+        if obj.status.health ~= nil then
+          hs.status = obj.status.health.status
+          if obj.status.health.message ~= nil then
+            hs.message = obj.status.health.message
+          end
+        end
+      end
+      return hs
+
+controller:
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+
+repoServer:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+server:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+applicationSet:
+  enabled: false
+
+redis:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi

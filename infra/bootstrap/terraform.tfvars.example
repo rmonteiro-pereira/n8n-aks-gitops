@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars (git-ignored). The first three come from
+#   tofu -chdir=../azure output
+subscription_id     = "00000000-0000-0000-0000-000000000000"
+resource_group_name = "rg-n8n-prod-eus2"
+cluster_name        = "aks-n8n-prod-eus2"
+
+gitops_repo_url = "https://github.com/your-org/n8n-aks-gitops.git"
+
+# Private repository: store a read-only deploy key in the vault and use the
+# SSH URL.
+# gitops_repo_url                 = "git@github.com:your-org/n8n-aks-gitops.git"
+# key_vault_name           = "kv-n8n-prod-xxxxx"
+# deploy_key_secret_name = "gitops-repo-deploy-key"

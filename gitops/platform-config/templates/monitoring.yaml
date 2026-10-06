@@ -1,0 +1,41 @@
+{{- if .Values.monitoring.enabled }}
+# The namespace and the Grafana admin credential exist BEFORE the monitoring
+# stack is installed (one sync wave later). node-exporter needs host access,
+# hence `privileged`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: grafana-admin
+  namespace: monitoring
+spec:
+  # Fields the API server would default are declared (here and in every
+  # ExternalSecret of this repository) so the live object equals the manifest.
+  refreshInterval: 1h0m0s
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: azure-key-vault
+  target:
+    name: grafana-admin
+    creationPolicy: Owner
+    deletionPolicy: Retain
+    template:
+      engineVersion: v2
+      mergePolicy: Replace
+      data:
+        admin-user: admin
+        admin-password: {{ "{{ .password }}" | quote }}
+  data:
+    - secretKey: password
+      remoteRef:
+        key: grafana-admin-password
+        conversionStrategy: Default
+        decodingStrategy: None
+        metadataPolicy: None
+{{- end }}

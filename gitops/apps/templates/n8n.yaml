@@ -1,0 +1,40 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: n8n
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ .Values.project }}
+  source:
+    repoURL: {{ required "repoURL is required" .Values.repoURL | quote }}
+    targetRevision: {{ .Values.targetRevision | quote }}
+    path: gitops/n8n
+    helm:
+      releaseName: n8n
+      # values.yaml of the chart carries everything about n8n itself. What is
+      # injected here is what comes from the environment; `n8n.values` in the
+      # environment file is merged on top for sizing and other overrides.
+      valuesObject:
+        {{- $env := dict
+              "host" (required "host is required" .Values.host)
+              "postgres" (dict "backup" (dict
+                "enabled" (ne .Values.azure.backup.destinationPath "")
+                "destinationPath" .Values.azure.backup.destinationPath
+                "clientId" .Values.azure.identities.postgresBackup))
+              "networkPolicy" (dict "apiServer" (dict
+                "cidrs" (compact (list .Values.azure.apiServerCidr))))
+              "monitoring" (dict "enabled" .Values.monitoring.enabled) }}
+        {{- toYaml (mustMergeOverwrite $env (deepCopy .Values.n8n.values)) | nindent 8 }}
+  destination:
+    {{- include "apps.destination" "n8n" | nindent 4 }}
+  syncPolicy:
+    {{- include "apps.syncPolicy" . | nindent 4 }}
+    managedNamespaceMetadata:
+      labels:
+        pod-security.kubernetes.io/enforce: restricted
+        pod-security.kubernetes.io/audit: restricted
+        pod-security.kubernetes.io/warn: restricted
